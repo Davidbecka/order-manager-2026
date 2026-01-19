@@ -58,10 +58,20 @@ if not st.session_state.logged_in:
 
 user_role = st.session_state.user_role
 
-# Tải dữ liệu ban đầu
+# --- TẢI DỮ LIỆU BAN ĐẦU (CẬP NHẬT CHỐNG LỖI KEYERROR) ---
 df_config = load_data("Config")
 df_history = load_data("LichSu")
 df_catalog = load_data("Catalog")
+
+# Tự động tạo khung nếu tab trống hoặc thiếu cột
+if df_config.empty or 'Line' not in df_config.columns:
+    df_config = pd.DataFrame(columns=["Line", "Deadline"])
+
+if df_history.empty or 'Line' not in df_history.columns:
+    df_history = pd.DataFrame(columns=['Ngày', 'Shop', 'Line', 'TenSP', 'BienThe', 'SKU', 'SoLuong', 'GiaBan', 'TongTien', 'GhiChu', 'LichSu', 'Timestamp'])
+
+if df_catalog.empty or 'Line' not in df_catalog.columns:
+    df_catalog = pd.DataFrame(columns=['TenSP', 'BienThe', 'SKU', 'DonGia', 'Line'])
 
 # ---------------------------------------------------------
 # GIAO DIỆN ADMIN
