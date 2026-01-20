@@ -15,10 +15,15 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def load_data(sheet_name):
     try:
         df = conn.read(worksheet=sheet_name, ttl="0")
-        return df.dropna(how='all')
+        df = df.dropna(how='all')
+        # TỰ ĐỘNG ÉP KIỂU SỐ để tránh lỗi tính toán
+        numeric_cols = ['SoLuong', 'GiaBan', 'TongTien', 'DonGia']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        return df
     except:
         return pd.DataFrame()
-
 def save_data(df, sheet_name):
     try:
         conn.update(worksheet=sheet_name, data=df)
@@ -128,28 +133,34 @@ if user_role == "admin":
                 if save_data(df_updated_cat, "Catalog"): st.success("Đã cập nhật!"); st.rerun()
 
     with tab2:
-        st.subheader("Bảng điều phối đơn hàng")
-        l_filter = st.selectbox("Lọc đơn theo Line:", ["Tất cả"] + list(df_config['Line'].unique()))
+        st.subheader("📊 Điều phối đơn hàng (Tự động tính toán)")
+        l_filter = st.selectbox("Lọc theo Line:", ["Tất cả"] + list(df_config['Line'].unique()))
         disp_df = df_history if l_filter == "Tất cả" else df_history[df_history['Line'] == l_filter]
         
         if not disp_df.empty:
-            # ĐỊNH DẠNG SỐ CÓ DẤU PHÂN CÁCH CHO ADMIN DỄ NHÌN
+            # TÍNH NĂNG TỰ ĐỘNG: Hiển thị bảng chỉnh sửa
             edited_history = st.data_editor(
                 disp_df, 
                 use_container_width=True,
                 column_config={
-                    "SoLuong": st.column_config.NumberColumn("Số Lượng", format="%d"),
+                    "SoLuong": st.column_config.NumberColumn("Số Lượng", format="%d", min_value=0),
                     "GiaBan": st.column_config.NumberColumn("Giá Bán", format="%d"),
-                    "TongTien": st.column_config.NumberColumn("Tổng Tiền", format="%d"),
-                }
+                    "TongTien": st.column_config.NumberColumn("Tổng Tiền (Tự động)", format="%d", disabled=True), # Khóa ô này để máy tự tính
+                },
+                key="admin_order_editor"
             )
-            if st.button("💾 Lưu thay đổi nhật ký"):
-                df_history.update(edited_history)
-                if save_data(df_history, "LichSu"): st.success("Đã lưu!"); st.rerun()
-        else:
-            st.info("Chưa có đơn hàng nào.")
-
-    with tab3:
+            
+            # LOGIC TỰ ĐỘNG TÍNH TOÁN
+            if st.button("💾 Xác nhận & Đồng bộ lên Google Sheets"):
+                # Máy tự tính: Tổng tiền = Số lượng * Giá bán
+                edited_history['TongTien'] = edited_history['SoLuong'] * edited_history['GiaBan']
+                
+                # Cập nhật thời gian chỉnh sửa tự động
+                t_now = datetime.now().strftime("%H:%M %d/%m")
+                edited_history['LichSu'] = edited_history['LichSu'].astype(str) + f" | [Admin cập nhật {t_now}]"
+                
+                if save_data(edited_history, "LichSu"):
+                    st.success("✅ Đã tự động tính toán và lưu dữ liệu thành công!"); st.rerun()    with tab3:
         # Giữ nguyên logic gom đơn cũ...
         line_sum = st.selectbox("Chọn Line gom đơn:", df_config['Line'].unique() if not df_config.empty else [])
         df_target = df_history[df_history['Line'] == line_sum]
