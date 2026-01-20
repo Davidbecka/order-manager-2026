@@ -5,35 +5,45 @@ import io
 from streamlit_autorefresh import st_autorefresh
 from streamlit_gsheets import GSheetsConnection
 
-# --- CẤU HÌNH HỆ THỐNG ---
+# --- 1. CẤU HÌNH HỆ THỐNG ---
 st.set_page_config(page_title="Hệ thống Order Online 2026", layout="wide")
 
-# Tự động làm mới mỗi 30 giây
+# Tự động làm mới mỗi 30 giây để cập nhật dữ liệu mới từ các shop/admin
 st_autorefresh(interval=30 * 1000, key="datarefresh")
 
-# --- KẾT NỐI GOOGLE SHEETS ---
+# --- 2. KẾT NỐI GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data(sheet_name):
     try:
-        # ttl="0" để luôn lấy dữ liệu mới nhất từ Google Sheets
-        return conn.read(worksheet=sheet_name, ttl="0")
-    except Exception as e:
+        # ttl="0" giúp dữ liệu luôn mới nhất, không bị lưu trong bộ nhớ đệm
+        df = conn.read(worksheet=sheet_name, ttl="0")
+        return df.dropna(how='all')
+    except:
         return pd.DataFrame()
 
 def save_data(df, sheet_name):
-    conn.update(worksheet=sheet_name, data=df)
-    st.cache_data.clear()
+    try:
+        conn.update(worksheet=sheet_name, data=df)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"❌ Lỗi ghi dữ liệu: {e}")
+        return False
 
-# --- HÀM TẠO FILE MẪU ---
-def create_template(cols):
-    df = pd.DataFrame(columns=cols)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    return output.getvalue()
+# --- 3. KIỂM TRA VÀ TẠO KHUNG DỮ LIỆU (CHỐNG LỖI KEYERROR) ---
+df_config = load_data("Config")
+df_history = load_data("LichSu")
+df_catalog = load_data("Catalog")
 
-# --- KIỂM TRA ĐĂNG NHẬP ---
+if df_config.empty or 'Line' not in df_config.columns:
+    df_config = pd.DataFrame(columns=['Line', 'Deadline'])
+if df_history.empty or 'Line' not in df_history.columns:
+    df_history = pd.DataFrame(columns=['Ngày', 'Shop', 'Line', 'TenSP', 'BienThe', 'SKU', 'SoLuong', 'GiaBan', 'TongTien', 'GhiChu', 'LichSu', 'Timestamp'])
+if df_catalog.empty or 'Line' not in df_catalog.columns:
+    df_catalog = pd.DataFrame(columns=['TenSP', 'BienThe', 'SKU', 'DonGia', 'Line'])
+
+# --- 4. ĐĂNG NHẬP ---
 try:
     from passwords import USER_DB
 except ImportError:
@@ -44,7 +54,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.markdown("<h2 style='text-align: center;'>🔐 HỆ THỐNG ĐIỀU PHỐI ORDER 2026</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center;'>🔐 ĐĂNG NHẬP HỆ THỐNG ORDER 2026</h2>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1: user = st.selectbox("Tài khoản chi nhánh", [""] + list(USER_DB.keys()))
     with c2: pwd = st.text_input("Mật khẩu", type="password")
@@ -58,147 +68,135 @@ if not st.session_state.logged_in:
 
 user_role = st.session_state.user_role
 
-# --- TẢI DỮ LIỆU BAN ĐẦU (CẬP NHẬT CHỐNG LỖI KEYERROR) ---
-df_config = load_data("Config")
-df_history = load_data("LichSu")
-df_catalog = load_data("Catalog")
-
-# Tự động tạo khung nếu tab trống hoặc thiếu cột
-if df_config.empty or 'Line' not in df_config.columns:
-    df_config = pd.DataFrame(columns=["Line", "Deadline"])
-
-if df_history.empty or 'Line' not in df_history.columns:
-    df_history = pd.DataFrame(columns=['Ngày', 'Shop', 'Line', 'TenSP', 'BienThe', 'SKU', 'SoLuong', 'GiaBan', 'TongTien', 'GhiChu', 'LichSu', 'Timestamp'])
-
-if df_catalog.empty or 'Line' not in df_catalog.columns:
-    df_catalog = pd.DataFrame(columns=['TenSP', 'BienThe', 'SKU', 'DonGia', 'Line'])
-
 # ---------------------------------------------------------
-# GIAO DIỆN ADMIN
+# 5. GIAO DIỆN ADMIN
 # ---------------------------------------------------------
 if user_role == "admin":
     st.title("🛠️ QUẢN TRỊ VIÊN (ADMIN)")
     tab1, tab2, tab3 = st.tabs(["🚀 Line & Danh mục", "📊 Điều phối & Nhật ký", "📦 Gom đơn NCC"])
 
     with tab1:
-        st.subheader("1. Cài đặt các Line hàng (Đợt hàng)")
-        ed_config = st.data_editor(df_config, num_rows="dynamic", use_container_width=True)
+        st.subheader("1. Quản lý Line hàng (Đợt hàng)")
+        ed_config = st.data_editor(df_config, num_rows="dynamic", use_container_width=True, key="ed_config")
         if st.button("Lưu cấu hình Line"):
-            save_data(ed_config, "Config")
-            st.success("Đã đồng bộ Line hàng lên Google Sheets!")
+            if save_data(ed_config, "Config"):
+                st.success("Đã đồng bộ Line hàng!"); st.rerun()
 
         st.divider()
-        st.subheader("2. Đăng tải sản phẩm cho Line")
-        st.download_button("📥 Tải File Mẫu Danh Mục (Admin)", data=create_template(['TenSP', 'BienThe', 'SKU', 'DonGia']), file_name="Mau_DanhMuc_Admin.xlsx")
+        st.subheader("2. Quản lý Danh mục Sản phẩm")
+        line_target = st.selectbox("Chọn Line để quản lý:", df_config['Line'].unique() if not df_config.empty else [])
         
-        line_target = st.selectbox("Chọn Line muốn đăng SP:", df_config['Line'].unique() if not df_config.empty else [])
-        up_cat = st.file_uploader("Úp file Excel danh mục cho Line này", type=['xlsx'])
-        if up_cat and st.button(f"Xác nhận cập nhật SP cho {line_target}"):
-            df_new = pd.read_excel(up_cat, dtype={'SKU': str})
-            df_new['Line'] = line_target
-            # Xóa bỏ SP cũ của Line này và thêm mới
-            df_updated_cat = pd.concat([df_catalog[df_catalog['Line'] != line_target], df_new], ignore_index=True)
-            save_data(df_updated_cat, "Catalog")
-            st.success(f"Đã cập nhật sản phẩm cho {line_target}!")
+        if line_target:
+            # Hiển thị sản phẩm hiện có của Line này
+            current_cat = df_catalog[df_catalog['Line'] == line_target]
+            st.write(f"Sản phẩm hiện có trong **{line_target}**:")
+            st.dataframe(current_cat, use_container_width=True)
+            
+            # Cập nhật sản phẩm mới
+            up_cat = st.file_uploader(f"Úp file Excel để ghi đè danh mục cho {line_target}", type=['xlsx'])
+            if up_cat and st.button(f"Xác nhận cập nhật SP cho {line_target}"):
+                df_new = pd.read_excel(up_cat, dtype={'SKU': str})
+                df_new['Line'] = line_target
+                # Giữ lại SP của các Line khác, chỉ ghi đè Line đang chọn
+                df_updated_cat = pd.concat([df_catalog[df_catalog['Line'] != line_target], df_new], ignore_index=True)
+                if save_data(df_updated_cat, "Catalog"):
+                    st.success("Đã cập nhật danh mục!"); st.rerun()
 
     with tab2:
-        st.subheader("Bảng điều phối & Theo dõi lịch sử")
-        line_view = st.selectbox("Lọc theo Line:", ["Tất cả"] + list(df_config['Line'].unique() if not df_config.empty else []))
-        disp_df = df_history if line_view == "Tất cả" else df_history[df_history['Line'] == line_view]
+        st.subheader("Bảng điều phối & Bộ lọc đơn hàng")
+        all_lines = ["Tất cả"] + list(df_config['Line'].unique())
+        line_filter = st.selectbox("Lọc danh sách đặt hàng theo Line:", all_lines)
+        
+        disp_df = df_history if line_filter == "Tất cả" else df_history[df_history['Line'] == line_filter]
         
         if not disp_df.empty:
-            st.write(f"Đang hiển thị đơn hàng: **{line_view}**")
-            edited_df = st.data_editor(disp_df, use_container_width=True, 
-                                     column_config={"LichSu": st.column_config.TextColumn("Nhật ký tương tác", width="large", disabled=True)})
+            st.info(f"Đang hiển thị đơn hàng của: {line_filter}")
+            # Cho phép Admin sửa số lượng hoặc ghi chú trực tiếp
+            edited_df = st.data_editor(disp_df, use_container_width=True, key="admin_order_editor")
             
-            if st.button("💾 Xác nhận lưu & Đẩy dữ liệu xuống Shop"):
-                time_now = datetime.now().strftime("%H:%M %d/%m")
-                # Tự động ghi Log lịch sử nếu Admin sửa số lượng
-                for idx in edited_df.index:
-                    if idx in df_history.index and edited_df.at[idx, 'SoLuong'] != df_history.at[idx, 'SoLuong']:
-                        old_val = df_history.at[idx, 'SoLuong']
-                        new_val = edited_df.at[idx, 'SoLuong']
-                        edited_df.at[idx, 'LichSu'] = str(edited_df.at[idx, 'LichSu']) + f" | [Admin sửa SL: {old_val}->{new_val} lúc {time_now}]"
-                
+            if st.button("💾 Lưu thay đổi đơn hàng"):
+                # Tự động tính lại tổng tiền
                 edited_df['TongTien'] = edited_df['SoLuong'] * edited_df['GiaBan']
+                # Cập nhật vào dữ liệu gốc
                 df_history.update(edited_df)
-                save_data(df_history, "LichSu")
-                st.success("Đã đồng bộ thay đổi thành công!"); st.rerun()
+                if save_data(df_history, "LichSu"):
+                    st.success("Đã đồng bộ thay đổi đơn hàng!"); st.rerun()
         else:
-            st.warning("Chưa có shop nào đặt hàng cho Line này.")
+            st.warning("Hiện chưa có đơn hàng nào cho mục này.")
 
     with tab3:
-        st.subheader("Gom tổng SKU gửi Nhà cung cấp")
-        line_sum = st.selectbox("Chọn Line gom đơn:", df_config['Line'].unique() if not df_config.empty else [])
+        st.subheader("Gom tổng đơn gửi Nhà cung cấp")
+        line_sum = st.selectbox("Chọn Line cần gom:", df_config['Line'].unique() if not df_config.empty else [])
         df_target = df_history[df_history['Line'] == line_sum]
         if not df_target.empty:
             summary = df_target.groupby(['SKU', 'TenSP', 'BienThe']).agg({'SoLuong': 'sum', 'GiaBan': 'first'}).reset_index()
+            summary['Thành Tiền'] = summary['SoLuong'] * summary['GiaBan']
             st.dataframe(summary, use_container_width=True)
-            output = io.BytesIO(); summary.to_excel(output, index=False)
-            st.download_button("📥 Tải file tổng gửi NCC", data=output.getvalue(), file_name=f"Tong_Dat_Hang_{line_sum}.xlsx")
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                summary.to_excel(writer, index=False)
+            st.download_button("📥 Tải đơn tổng NCC (.xlsx)", data=output.getvalue(), file_name=f"Tong_Dat_Hang_{line_sum}.xlsx")
 
 # ---------------------------------------------------------
-# GIAO DIỆN SHOP (CHI NHÁNH)
+# 6. GIAO DIỆN SHOP (CHI NHÁNH)
 # ---------------------------------------------------------
 else:
     st.title(f"🏬 Chi nhánh: {user_role}")
     line_sel = st.selectbox("Chọn Line hàng bạn muốn đặt:", df_config['Line'].unique() if not df_config.empty else [])
     
     if line_sel:
-        # Lấy danh mục SP và Deadline của Line này
         df_line_cat = df_catalog[df_catalog['Line'] == line_sel]
-        line_info = df_config[df_config['Line'] == line_sel].iloc[0]
         
-        try:
-            deadline = datetime.strptime(str(line_info['Deadline']), "%Y-%m-%d %H:%M:%S")
-            is_expired = datetime.now() > deadline
-        except:
-            is_expired = False # Phòng trường hợp định dạng ngày sai
-
         if df_line_cat.empty:
-            st.warning("Admin chưa đăng tải danh mục sản phẩm cho Line này.")
-        elif is_expired:
-            st.error(f"⌛ Đã hết hạn đặt hàng cho {line_sel} ({line_info['Deadline']})")
-            st.dataframe(df_history[(df_history['Shop'] == user_role) & (df_history['Line'] == line_sel)], use_container_width=True)
+            st.warning("Admin chưa đăng tải sản phẩm cho Line này.")
         else:
-            st.success(f"⏰ Hạn chót đặt hàng: {line_info['Deadline']}")
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("### ✍️ Đặt hàng lẻ")
+                st.markdown("### 🛒 Đặt hàng lẻ")
                 with st.form("manual_form", clear_on_submit=True):
                     sp_name = st.selectbox("Sản phẩm", df_line_cat['TenSP'].unique())
                     bt_name = st.selectbox("Màu/Size", df_line_cat[df_line_cat['TenSP']==sp_name]['BienThe'].unique())
                     qty = st.number_input("Số lượng", min_value=1, step=1)
-                    if st.form_submit_button("Xác nhận đặt"):
+                    
+                    if st.form_submit_button("Xác nhận gửi đơn"):
                         item = df_line_cat[(df_line_cat['TenSP']==sp_name) & (df_line_cat['BienThe']==bt_name)].iloc[0]
-                        t_str = datetime.now().strftime("%H:%M %d/%m")
+                        # SỬA LỖI NAMEERROR: Khai báo t_now trước khi dùng
+                        t_now = datetime.now().strftime("%H:%M %d/%m")
                         new_row = pd.DataFrame([{
                             'Ngày': t_now, 'Shop': user_role, 'Line': line_sel, 'TenSP': sp_name, 'BienThe': bt_name,
                             'SKU': str(item['SKU']), 'SoLuong': qty, 'GiaBan': item['DonGia'], 'TongTien': qty * item['DonGia'],
-                            'GhiChu': "", 'LichSu': f"[Shop tạo lúc {t_str}]", 'Timestamp': datetime.now().timestamp()
+                            'GhiChu': "", 'LichSu': f"[Shop tạo {t_now}]", 'Timestamp': datetime.now().timestamp()
                         }])
                         df_history = pd.concat([df_history, new_row], ignore_index=True)
-                        save_data(df_history, "LichSu"); st.rerun()
+                        if save_data(df_history, "LichSu"):
+                            st.success("Gửi đơn thành công!"); st.rerun()
             
             with c2:
                 st.markdown("### 📁 Đặt hàng theo file")
-                st.download_button("📥 Tải File Mẫu (Shop)", data=create_template(['SKU', 'SoLuong']), file_name="Mau_Dat_Hang_Shop.xlsx")
-                up_file = st.file_uploader("Úp file mẫu đã điền", type=['xlsx'])
+                up_file = st.file_uploader("Úp file mẫu SKU/SoLuong", type=['xlsx'])
                 if up_file and st.button("🚀 Gửi đơn hàng loạt"):
                     df_up = pd.read_excel(up_file, dtype={'SKU': str})
-                    t_str = datetime.now().strftime("%H:%M %d/%m")
+                    t_now = datetime.now().strftime("%H:%M %d/%m")
                     df_final = df_up.merge(df_line_cat, on='SKU', how='left')
-                    df_final['Ngày'] = t_str; df_final['Shop'] = user_role; df_final['Line'] = line_sel
-                    df_final['GiaBan'] = df_final['DonGia']; df_final['TongTien'] = df_final['SoLuong'] * df_final['GiaBan']
-                    df_final['LichSu'] = f"[Shop úp file lúc {t_str}]"; df_final['Timestamp'] = datetime.now().timestamp()
+                    df_final['Ngày'] = t_now
+                    df_final['Shop'] = user_role
+                    df_final['Line'] = line_sel
+                    df_final['GiaBan'] = df_final['DonGia']
+                    df_final['TongTien'] = df_final['SoLuong'] * df_final['GiaBan']
+                    df_final['LichSu'] = f"[Shop úp file {t_now}]"
+                    df_final['Timestamp'] = datetime.now().timestamp()
                     df_history = pd.concat([df_history, df_final], ignore_index=True)
-                    save_data(df_history, "LichSu"); st.success("Đã gửi đơn thành công!"); st.rerun()
+                    if save_data(df_history, "LichSu"):
+                        st.success("Đã gửi đơn file thành công!"); st.rerun()
 
-        st.divider()
-        st.subheader("📋 Trạng thái đơn của bạn (Tự động cập nhật)")
-        my_orders = df_history[(df_history['Shop'] == user_role) & (df_history['Line'] == line_sel)]
-        st.dataframe(my_orders, use_container_width=True)
+    st.divider()
+    st.subheader("📋 Đơn hàng của bạn")
+    my_orders = df_history[(df_history['Shop'] == user_role) & (df_history['Line'] == line_sel)]
+    st.dataframe(my_orders, use_container_width=True)
 
 with st.sidebar:
     st.write(f"Đăng nhập: **{user_role}**")
-    if st.button("Đăng xuất"): st.session_state.logged_in = False; st.rerun()
+    if st.button("Đăng xuất"): 
+        st.session_state.logged_in = False
+        st.rerun()
