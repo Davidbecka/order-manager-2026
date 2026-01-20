@@ -171,6 +171,32 @@ if user_role == "admin":
                 "GiaBan": st.column_config.NumberColumn(format="%d"),
                 "Thành Tiền": st.column_config.NumberColumn(format="%d")
             })
+    with tab3:
+        st.subheader("📦 Tổng hợp số lượng gửi Nhà cung cấp")
+        line_sum = st.selectbox("Chọn Line muốn gom đơn:", df_config['Line'].unique() if not df_config.empty else [])
+        
+        if line_sum:
+            df_target = df_history[df_history['Line'] == line_sum]
+            if not df_target.empty:
+                # Gom nhóm: Tính tổng số lượng theo SKU
+                summary = df_target.groupby(['SKU', 'TenSP', 'BienThe']).agg({'SoLuong': 'sum', 'GiaBan': 'first'}).reset_index()
+                summary['Thành Tiền'] = summary['SoLuong'] * summary['GiaBan']
+                
+                st.write(f"### Tổng hợp đơn hàng: {line_sum}")
+                st.dataframe(summary, use_container_width=True, column_config={
+                    "SoLuong": st.column_config.NumberColumn("Tổng SL", format="%d"),
+                    "GiaBan": st.column_config.NumberColumn("Giá Nhập/Bán", format="%d"),
+                    "Thành Tiền": st.column_config.NumberColumn(format="%d")
+                })
+                
+                # Nút tải file Excel
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    summary.to_excel(writer, index=False)
+                st.download_button(label="📥 Tải File Gom Đơn (Excel)", data=output.getvalue(), 
+                                   file_name=f"Gom_Don_{line_sum}_{datetime.now().strftime('%d%m')}.xlsx", mime="application/vnd.ms-excel")
+            else:
+                st.info("Line này chưa có shop nào đặt hàng.")
 
 # ---------------------------------------------------------
 # 6. GIAO DIỆN SHOP
